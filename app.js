@@ -204,7 +204,7 @@ function getMissingVariables(formula, checkedVars = new Set()) {
     }
   });
 
-  // --- NEW: EXTRACT REROLL RULES TO PREVENT FALSE MISSING VARIABLE ALERTS ---
+  // --- EXTRACT REROLL RULES TO PREVENT FALSE MISSING VARIABLE ALERTS ---
   workingFormula = workingFormula.replace(
     /reroll(?:once|repeating|additively|additivelyrepeating)\[([^\]]+)\]/gi,
     (match, val) => {
@@ -215,6 +215,12 @@ function getMissingVariables(formula, checkedVars = new Set()) {
       }
       return ""; // Remove from formula for the normal bracketRegex validation
     },
+  );
+
+  // ---allow for the replace keyword ---
+  workingFormula = workingFormula.replace(
+    /replace\[\d+(?:-\d+)?\]\[\d+\]/gi,
+    "",
   );
 
   const bracketRegex = /\[([^\]]+)\]/g;
@@ -293,10 +299,12 @@ function parseAndRoll(label, formula) {
         if (foundKey !== undefined) {
           return evaluateMathAndDice(activeVars[foundKey], depth + 1);
         } else {
-          // Soft-fail: reserved reroll keywords (min/max) are not variables.
-          // Leave them intact so the dice evaluation loop can resolve them
-          // against the die's actual sides at roll time.
-          if (/^(min|max)$/i.test(varName.trim())) {
+          // Soft-fail: reserved keywords (min/max) and literal numbers/ranges
+          // are not variables. Leave them intact for the dice evaluation loop.
+          if (
+            /^(min|max)$/i.test(varName.trim()) ||
+            /^\d+(-\d+)?$/.test(varName.trim())
+          ) {
             return fullMatch;
           }
           hasMissingVar = true;
@@ -324,14 +332,26 @@ function parseAndRoll(label, formula) {
 
       // STEP 3: LEFT-TO-RIGHT DICE EVALUATION LOOP
       const diceRegex =
-        /(\d+)d(\d+)(p\d+kh\d+|p\d+kl\d+|kh\d+|kl\d+|daggerheart|reroll(?:once|repeating|additively|additivelyrepeating)\[[^\]]+\])?/;
+        /(\d+)d(\d+)(?:replace\[(\d+)(?:-(\d+))?\]\[(\d+)\])?(p\d+kh\d+|p\d+kl\d+|kh\d+|kl\d+|daggerheart|reroll(?:once|repeating|additively|additivelyrepeating)\[[^\]]+\])?/;
 
       while (diceRegex.test(workingExpr)) {
         let matchInstance = workingExpr.match(diceRegex);
         let fullDiceExpression = matchInstance[0];
         let count = parseInt(matchInstance[1], 10);
         let sides = parseInt(matchInstance[2], 10);
-        let modifier = matchInstance[3] || "";
+
+        // New Extraction Logic
+        let hasReplace = matchInstance[3] !== undefined;
+        let repMin = hasReplace ? parseInt(matchInstance[3], 10) : null;
+        let repMax = matchInstance[4] ? parseInt(matchInstance[4], 10) : repMin;
+        let repTarget = hasReplace ? parseInt(matchInstance[5], 10) : null;
+        let modifier = matchInstance[6] || "";
+
+        // Centralized Roll Generator
+        const getRoll = () => {
+          let r = Math.floor(Math.random() * sides) + 1;
+          return hasReplace && r >= repMin && r <= repMax ? repTarget : r;
+        };
 
         let evaluatedNumericValue = 0;
         let logString = "";
@@ -339,8 +359,8 @@ function parseAndRoll(label, formula) {
 
         // 1. Daggerheart Interceptor
         if (modifier === "daggerheart") {
-          let hopeRoll = Math.floor(Math.random() * sides) + 1;
-          let fearRoll = Math.floor(Math.random() * sides) + 1;
+          let hopeRoll = getRoll();
+          let fearRoll = getRoll();
           evaluatedNumericValue = hopeRoll + fearRoll;
           finalRollsArray = [hopeRoll, fearRoll];
 
@@ -370,7 +390,7 @@ function parseAndRoll(label, formula) {
           for (let i = 0; i < poolIterations; i++) {
             let currentIterationRolls = [];
             for (let j = 0; j < count; j++) {
-              currentIterationRolls.push(Math.floor(Math.random() * sides) + 1);
+              currentIterationRolls.push(getRoll());
             }
             let currentIterationTotal = currentIterationRolls.reduce(
               (sum, val) => sum + val,
@@ -402,7 +422,7 @@ function parseAndRoll(label, formula) {
           let keepCount = parseInt(modifier.replace("kh", ""), 10);
           let rolls = [];
           for (let i = 0; i < count; i++) {
-            rolls.push(Math.floor(Math.random() * sides) + 1);
+            rolls.push(getRoll());
           }
           let kept = [...rolls].sort((a, b) => b - a).slice(0, keepCount);
           evaluatedNumericValue = kept.reduce((sum, val) => sum + val, 0);
@@ -414,7 +434,7 @@ function parseAndRoll(label, formula) {
           let keepCount = parseInt(modifier.replace("kl", ""), 10);
           let rolls = [];
           for (let i = 0; i < count; i++) {
-            rolls.push(Math.floor(Math.random() * sides) + 1);
+            rolls.push(getRoll());
           }
           let kept = [...rolls].sort((a, b) => a - b).slice(0, keepCount);
           evaluatedNumericValue = kept.reduce((sum, val) => sum + val, 0);
@@ -450,7 +470,7 @@ function parseAndRoll(label, formula) {
           let cumulativeSum = 0;
 
           for (let i = 0; i < count; i++) {
-            let currentRoll = Math.floor(Math.random() * sides) + 1;
+            let currentRoll = getRoll();
             let singleDieLogs = [];
             let dieTotal = currentRoll;
             let iterations = 0;
@@ -466,7 +486,7 @@ function parseAndRoll(label, formula) {
                   iterations < maxIter &&
                   sides > 1
                 ) {
-                  currentRoll = Math.floor(Math.random() * sides) + 1;
+                  currentRoll = getRoll();
                   iterations++;
                   if (currentRoll === targetNum && iterations < maxIter) {
                     singleDieLogs.push(`~~${currentRoll}~~`);
@@ -491,7 +511,7 @@ function parseAndRoll(label, formula) {
                   iterations < maxIter &&
                   sides > 1
                 ) {
-                  currentRoll = Math.floor(Math.random() * sides) + 1;
+                  currentRoll = getRoll();
                   singleDieLogs.push(`${currentRoll}`);
                   dieTotal += currentRoll;
                   iterations++;
@@ -519,7 +539,7 @@ function parseAndRoll(label, formula) {
         else {
           let rolls = [];
           for (let i = 0; i < count; i++) {
-            rolls.push(Math.floor(Math.random() * sides) + 1);
+            rolls.push(getRoll());
           }
           evaluatedNumericValue = rolls.reduce((sum, val) => sum + val, 0);
           logString = `${fullDiceExpression} (${rolls.join("+")}=${evaluatedNumericValue})`;
